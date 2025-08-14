@@ -1,0 +1,55 @@
+# docker-compose.yml
+version: "3.8"
+
+services:
+  api:
+    build: ./api
+    environment:
+      - OLLAMA_BACKENDS=http://ollama1:11434,http://ollama2:11434
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ollama1
+      - ollama2
+    networks: [ollama_network]
+
+  ollama1:
+    image: ollama/ollama:latest
+    container_name: ollama1
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=4       
+    volumes:
+      - ollama1:/root/.ollama
+    networks: [ollama_network]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama2:
+    image: ollama/ollama:latest
+    container_name: ollama2
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=4
+    volumes:
+      - ollama2:/root/.ollama
+    networks: [ollama_network]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  ollama1: {}
+  ollama2: {}
+
+networks:
+  llmnet: {}
