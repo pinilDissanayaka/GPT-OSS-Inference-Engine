@@ -23,17 +23,34 @@ DEFAULT_TIMEOUT = 60
 
 async def pick_backend() -> str:
     """
-    Rotate the deque one step (true round-robin) and return the next backend.
+    Pick the next backend in round-robin order. Each call to this function will
+    return a different backend, looping back to the start of the list when we
+    reach the end.
+
+    Returns:
+        str: The base URL of the next available backend.
     """
-    BACKENDS.rotate(-1)           # move left; new head is the "next" backend
+    BACKENDS.rotate(-1)        
     return BACKENDS[0]
 
 
 async def _is_healthy(base_url: str, timeout: float = 1.0) -> bool:
     """
-    Try to hit Ollama's /api/tags (cheap) to confirm the server responds.
-    Uses aiohttp if available; otherwise returns True (skip check).
+    Check if the backend is healthy by making a request to /api/tags.
+
+    We consider the backend healthy if we can make a successful request to
+    /api/tags within the given timeout.
+
+    If aiohttp can't be imported, we assume the backend is healthy.
+
+    Args:
+        base_url (str): Base URL of the backend.
+        timeout (float, optional): Timeout in seconds. Defaults to 1.0.
+
+    Returns:
+        bool: True if the backend is healthy, False otherwise.
     """
+
     try:
         import aiohttp  
     except Exception:
@@ -55,10 +72,21 @@ def _build_llm(
     thinking: Optional[bool] = None,
     extra_kwargs: Optional[dict] = None,
 ) -> ChatOllama:
+
     """
-    Centralized constructor so we don't duplicate kwargs. We keep 'name=model'
-    (as in your snippet) to match your environment, while also allowing extras.
+    Build a ChatOllama client from the given arguments.
+
+    Args:
+        backend (str): Base URL of the backend.
+        model (str): Model to use.
+        temperature (float, optional): Temperature. Defaults to 0.0.
+        thinking (Optional[bool], optional): Whether to think before responding. Defaults to None.
+        extra_kwargs (Optional[dict], optional): Extra keyword arguments to pass to ChatOllama. Defaults to None.
+
+    Returns:
+        ChatOllama: The built ChatOllama client.
     """
+
     kwargs = dict(base_url=backend, model=model, temperature=temperature)
     if thinking is not None:
         kwargs["thinking"] = thinking
@@ -79,8 +107,31 @@ async def get_llm_client(
     extra_kwargs: Optional[dict] = None,
 ) -> ChatOllama:
     """
-    Return a connected ChatOllama client from the first healthy / working backend.
-    Retries across backends in round-robin order with exponential backoff.
+    Get a ready ChatOllama client that can be used to call the given model.
+
+    If health_check is True, we will check if the backend is healthy by making a
+    request to /api/tags before returning a client. If the backend is not healthy,
+    we will retry on the next backend.
+
+    If attempts is greater than 1, we will retry the call on the next backend if
+    the previous backend fails. We will use an exponential backoff with a little
+    jitter to avoid hammering the backends.
+
+    Args:
+        model (str, optional): Model to use. Defaults to "gpt-oss:20b".
+        temperature (float, optional): Temperature. Defaults to 0.0.
+        thinking (bool, optional): Whether to think before responding. Defaults to False.
+        attempts (int, optional): Number of attempts to make. Defaults to DEFAULT_ATTEMPTS.
+        health_check (bool, optional): Whether to health check the backend. Defaults to True.
+        backoff_base (float, optional): Base for the exponential backoff. Defaults to DEFAULT_BACKOFF_BASE.
+        backoff_max (float, optional): Maximum backoff time in seconds. Defaults to DEFAULT_BACKOFF_MAX.
+        extra_kwargs (Optional[dict], optional): Extra keyword arguments to pass to ChatOllama. Defaults to None.
+
+    Returns:
+        ChatOllama: The built ChatOllama client.
+
+    Raises:
+        RuntimeError: If all backends failed after the given number of attempts.
     """
     attempts = max(1, min(attempts, len(BACKENDS)))
     last_err: Optional[BaseException] = None
@@ -136,17 +187,26 @@ async def forward_to_backend(
     stream: bool = False,
     extra_kwargs: Optional[dict] = None,
 ) -> Union[ChatOllama, str, AIMessage]:
-    """
-    High-level helper:
-      - If return_client=True, returns a ready ChatOllama client (no call made).
-      - Otherwise, calls the model with your `question` and returns the response.
-        * If stream=True -> returns an AIMessage streamed to completion.
-        * Else -> returns AIMessage or str (depending on lc version), typically use `.content`.
 
-    Notes:
-      - We wrap the single call in a timeout (if provided).
-      - We rely on `get_llm_client` for retry/failover and only make ONE call.
-        (If you want retries on the *call itself*, add a loop here as well.)
+    """
+    Forward a question to the chosen backend.
+
+    Args:
+        model (str): Model to use.
+        question (Union[str, dict]): Question to ask the backend.
+        temperature (float, optional): Temperature. Defaults to 0.0.
+        thinking (bool, optional): Whether to think before responding. Defaults to False.
+        attempts (int, optional): Number of attempts to make. Defaults to DEFAULT_ATTEMPTS.
+        health_check (bool, optional): Whether to check the backend's health. Defaults to True.
+        backoff_base (float, optional): Base for the exponential backoff. Defaults to DEFAULT_BACKOFF_BASE.
+        backoff_max (float, optional): Maximum backoff time. Defaults to DEFAULT_BACKOFF_MAX.
+        timeout (Optional[float], optional): Timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+        return_client (bool, optional): Whether to return the client instead of the response. Defaults to False.
+        stream (bool, optional): Whether to stream the response. Defaults to False.
+        extra_kwargs (Optional[dict], optional): Extra keyword arguments to pass to ChatOllama. Defaults to None.
+
+    Returns:
+        Union[ChatOllama, str, AIMessage]: The response from the backend, or the client if return_client is True.
     """
     llm = await get_llm_client(
         model=model,
@@ -163,6 +223,18 @@ async def forward_to_backend(
         return llm
 
     async def _call():
+        """
+        Execute an asynchronous call to the LLM client and process the response.
+
+        If streaming is enabled, the function collects chunks of the response,
+        concatenates them, and returns the result either as an AIMessage or a string
+        if AIMessage cannot be imported. Otherwise, it returns the result of a direct
+        invocation of the LLM client.
+
+        Returns:
+            Union[AIMessage, str]: The processed response from the LLM client.
+        """
+
         if stream:
 
             chunks = []
