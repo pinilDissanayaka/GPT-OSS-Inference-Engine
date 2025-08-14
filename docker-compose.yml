@@ -3,9 +3,7 @@ version: "3.8"
 
 services:
   api:
-    build: ./api
-    environment:
-      - OLLAMA_BACKENDS=http://ollama1:11434,http://ollama2:11434
+    build: .
     ports:
       - "8000:8000"
     depends_on:
@@ -52,4 +50,4 @@ volumes:
   ollama2: {}
 
 networks:
-  llmnet: {}
+  ollama_network: {}
