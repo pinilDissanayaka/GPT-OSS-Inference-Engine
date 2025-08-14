@@ -14,7 +14,6 @@ async def chat(question:str):
     
     print(response)
 
-
     return response
 
 
